@@ -1,0 +1,43 @@
+name: Compile SRS
+on:
+  push:
+    branches: [ master, main ] # 当代码推送到 master 或 main 时触发
+  workflow_dispatch: # 允许你手动点击按钮运行
+
+jobs:
+  build-srs:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # 必须赋予写入权限，否则无法推送编译后的文件
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Sing-box
+        run: |
+          # 自动获取最新版本的 sing-box
+          SB_VERSION=$(curl -s https://api.github.com/repos/SagerNet/sing-box/releases/latest | grep tag_name | cut -d '"' -f 4 | sed 's/v//')
+          curl -Lo sing-box.tar.gz https://github.com/SagerNet/sing-box/releases/download/v${SB_VERSION}/sing-box-${SB_VERSION}-linux-amd64.tar.gz
+          tar -xzf sing-box.tar.gz
+          mv sing-box-*/sing-box ./ && chmod +x sing-box
+
+      - name: Compile Rules
+        run: |
+          mkdir -p ./dist
+          # 遍历 rules 文件夹下所有 json 文件并编译
+          for file in rules/*.json; do
+            filename=$(basename "$file" .json)
+            ./sing-box rule-set compile "$file" -o "./dist/${filename}.srs"
+          done
+
+      - name: Deploy to Branch
+        run: |
+          cd dist
+          git init
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git checkout -b srs-release
+          git add .
+          git commit -m "Update SRS [$(date)]"
+          # 使用 GITHUB_TOKEN 推送到 srs-release 分支
+          git push -f https://${{ github.actor }}:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }} srs-release
