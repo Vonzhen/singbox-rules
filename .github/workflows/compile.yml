@@ -1,43 +1,52 @@
-name: Compile SRS
+name: Compile Rules to SRS
+
 on:
   push:
-    branches: [ master, main ] # 当代码推送到 master 或 main 时触发
-  workflow_dispatch: # 允许你手动点击按钮运行
+    branches: [ master, main ]
+    paths:
+      - 'rules/**' # 只有 rules 文件夹内的文件变动时才触发
+  workflow_dispatch: # 支持手动点击运行
 
 jobs:
-  build-srs:
+  build:
     runs-on: ubuntu-latest
     permissions:
-      contents: write # 必须赋予写入权限，否则无法推送编译后的文件
+      contents: write # 赋予脚本向仓库写入文件的权限
     steps:
-      - name: Checkout code
+      - name: Checkout Repository
         uses: actions/checkout@v4
 
       - name: Install Sing-box
         run: |
-          # 自动获取最新版本的 sing-box
-          SB_VERSION=$(curl -s https://api.github.com/repos/SagerNet/sing-box/releases/latest | grep tag_name | cut -d '"' -f 4 | sed 's/v//')
-          curl -Lo sing-box.tar.gz https://github.com/SagerNet/sing-box/releases/download/v${SB_VERSION}/sing-box-${SB_VERSION}-linux-amd64.tar.gz
+          # 自动获取最新稳定版 sing-box
+          TAG=$(curl -s https://api.github.com/repos/SagerNet/sing-box/releases/latest | grep tag_name | cut -d '"' -f 4 | sed 's/v//')
+          echo "Using sing-box version: $TAG"
+          curl -Lo sing-box.tar.gz "https://github.com/SagerNet/sing-box/releases/download/v${TAG}/sing-box-${TAG}-linux-amd64.tar.gz"
           tar -xzf sing-box.tar.gz
           mv sing-box-*/sing-box ./ && chmod +x sing-box
 
-      - name: Compile Rules
+      - name: Compile JSON to SRS
         run: |
-          mkdir -p ./dist
-          # 遍历 rules 文件夹下所有 json 文件并编译
+          mkdir -p rules-srs
+          # 遍历 rules 文件夹下所有 .json 文件
           for file in rules/*.json; do
             filename=$(basename "$file" .json)
-            ./sing-box rule-set compile "$file" -o "./dist/${filename}.srs"
+            echo "Compiling: $filename"
+            ./sing-box rule-set compile "$file" -o "rules-srs/${filename}.srs"
           done
 
-      - name: Deploy to Branch
+      - name: Push Changes
         run: |
-          cd dist
-          git init
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git checkout -b srs-release
-          git add .
-          git commit -m "Update SRS [$(date)]"
-          # 使用 GITHUB_TOKEN 推送到 srs-release 分支
-          git push -f https://${{ github.actor }}:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }} srs-release
+          git config --local user.name "github-actions[bot]"
+          git config --local user.email "github-actions[bot]@users.noreply.github.com"
+          
+          # 提交 rules-srs 文件夹下的所有新生成的二进制文件
+          git add rules-srs/*.srs
+          
+          # 检查是否有文件更新，避免空提交报错
+          if git diff --staged --quiet; then
+            echo "No changes in SRS files. Skipping push."
+          else
+            git commit -m "Auto-compiled SRS rules: $(date +'%Y-%m-%d %H:%M')"
+            git push origin HEAD:${{ github.ref_name }}
+          fi
